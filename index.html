@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logs Reader</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6b6b72; --line: #e2e2e6; --panel: #f6f6f8; --code: #f2f3f5; --accent: #2f6fde; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141416; --fg: #e6e6ea; --muted: #9a9aa3; --line: #2b2b31; --panel: #1b1b1f; --code: #1f1f24; --accent: #7aa7ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: grid; grid-template-columns: 270px 1fr;
+         font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  aside { overflow: auto; padding: 12px; background: var(--panel); border-right: 1px solid var(--line); }
+  main { overflow: auto; padding: 0 16px 16px; }
+  h2 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .dir { margin: 10px 0 2px; font-size: 11px; color: var(--muted); word-break: break-all; }
+  aside button { display: block; width: 100%; padding: 4px 6px; border: 0; border-radius: 4px; text-align: left;
+                 font: inherit; color: inherit; background: none; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  aside button:hover, aside button.on { background: var(--line); }
+  aside small { color: var(--muted); }
+  .bar { position: sticky; top: 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+         padding: 10px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .bar input[type=search] { flex: 1 1 220px; padding: 5px 8px; font: inherit; color: inherit; background: var(--code);
+                            border: 1px solid var(--line); border-radius: 4px; }
+  .bar input[type=number] { width: 4em; font: inherit; }
+  #status { color: var(--muted); font-size: 12px; width: 100%; }
+  section { margin-top: 16px; }
+  h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+  h3 small { font-weight: 400; color: var(--muted); }
+  .e { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; padding: 4px 0; border-top: 1px solid var(--line); }
+  .e time, .e .f { font-size: 12px; color: var(--muted); }
+  .e .d { grid-column: 2; }
+  pre { grid-column: 2; margin: 2px 0 0; padding: 6px 8px; max-height: 16em; overflow: auto; background: var(--code);
+        border-radius: 4px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+  .empty { margin-top: 40px; color: var(--muted); text-align: center; }
+  @media (max-width: 700px) {
+    body { height: auto; grid-template-columns: 1fr; }
+    aside { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h2>Recent</h2><div id="recent"></div>
+  <h2>Files</h2><div id="files"></div>
+  <h2>Local</h2>
+  <label><small>Open or drop .log / .jsonl files</small><input id="pick" type="file" accept=".log,.jsonl" multiple></label>
+</aside>
+<main>
+  <div class="bar">
+    <strong id="title">No log open</strong>
+    <input id="q" type="search" placeholder="Search commands and descriptions">
+    <label><input id="ro" type="checkbox"> Hide read-only</label>
+    <label>Session gap <input id="gap" type="number" min="1" value="30"> min</label>
+    <div id="status"></div>
+  </div>
+  <div id="out"><p class="empty">Pick a log on the left.</p></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const base = p => p.split('/').pop();
+const ALL = '*';
+let files = [], entries = [], current = null;
+
+// Old hook format: "[YYYY-MM-DD HH:MM:SS] command", command may span lines. New: one JSON object per line.
+function parse(text, file) {
+  if (file.endsWith('.jsonl')) {
+    return text.split('\n').flatMap(l => { try { return [{ ...JSON.parse(l), file }]; } catch { return []; } });
+  }
+  const ms = [...text.matchAll(/^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] /gm)];
+  return ms.map((m, i) => ({ ts: m[1], file, cmd: text.slice(m.index + m[0].length, ms[i + 1]?.index ?? text.length).trimEnd() }));
+}
+
+// ponytail: verb heuristic — read-only only if every segment starts with a read verb and nothing is written;
+// anything inside python3/heredocs/loops counts as not read-only. Extend READ if real reads slip through.
+const READ = /^(cd|grep|rg|cat|ls|head|tail|wc|find|sed|echo|printf|which|type|stat|du|df|diff|file|tree|pwd|jq|awk|sort|uniq|cut|tr|nl|column|readlink|realpath|basename|dirname|md5sum|sha256sum|date|read|test|true|make -n|git (status|log|diff|show|branch|remote|rev-parse|ls-files|check-ignore|blame)|kubectl (get|describe|logs|config|kustomize|explain)|helm (template|lint|list|show|get|status|version)|docker (ps|images|logs|inspect))\b/;
+// Shell glue that runs nothing itself: loop/if keywords, plain variable assignments.
+const GLUE = /^(done|fi|esac|for \w+ in .*|[A-Za-z_]\w*=\S*)$/;
+function readOnly(cmd) {
+  const s = cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, '""');
+  if (/\bsed\b[^|;&\n]*\s-i|\s-(delete|exec)\b|(^|[^0-9&])>>?(?!\s*(\/dev\/null|&))/.test(s)) return false;
+  return s.split(/&&|\|\||[;|\n]/).every(seg => {
+    seg = seg.trim().replace(/^(do|then|else|if|while|until|!)\s+/, '');
+    return !seg || GLUE.test(seg) || READ.test(seg);
+  });
+}
+
+// Entries with a session id group by it; old entries without one split on time gaps.
+function sessions(list, gapMin) {
+  const byId = new Map(), out = [];
+  let cur = null;
+  for (const e of list) {
+    e.t ??= Date.parse(e.ts.replace(' ', 'T'));
+    if (e.session) {
+      if (!byId.has(e.session)) { byId.set(e.session, { id: e.session, items: [] }); out.push(byId.get(e.session)); }
+      byId.get(e.session).items.push(e);
+    } else {
+      if (!cur || e.t - cur.items.at(-1).t > gapMin * 60e3) out.push(cur = { items: [] });
+      cur.items.push(e);
+    }
+  }
+  return out.sort((a, b) => b.items.at(-1).t - a.items.at(-1).t);
+}
+
+function render() {
+  const q = $('#q').value.toLowerCase(), hideRo = $('#ro').checked;
+  let shown = 0, hidden = 0, html = '';
+  const groups = sessions(entries, +$('#gap').value || 30);
+  for (const g of groups) {
+    const items = g.items.filter(e => {
+      if (q && !`${e.cmd}\n${e.desc ?? ''}`.toLowerCase().includes(q)) return false;
+      if (hideRo && (e.ro ??= readOnly(e.cmd))) { hidden++; return false; }
+      return true;
+    });
+    if (!items.length) continue;
+    shown += items.length;
+    const first = g.items[0].ts, last = g.items.at(-1).ts;
+    const where = [...new Set(g.items.map(e => e.file))].join(', ');
+    html += `<section><h3>${esc(first.slice(0, 16))} → ${esc(last.slice(first.slice(0, 10) === last.slice(0, 10) ? 11 : 0, 16))}
+      <small>· ${items.length}/${g.items.length} commands · ${esc(where)}${g.id ? ' · ' + esc(g.id.slice(0, 8)) : ''}</small></h3>`;
+    for (const e of items) {
+      html += `<div class="e"><time>${esc(e.ts.slice(11))}</time><span class="f" title="${esc(e.cwd)}">${esc(e.file)}</span>
+        ${e.desc ? `<span class="d">${esc(e.desc)}</span>` : ''}<pre>${esc(e.cmd)}</pre></div>`;
+    }
+    html += '</section>';
+  }
+  $('#out').innerHTML = html || '<p class="empty">Nothing matches.</p>';
+  $('#status').textContent = `${shown} of ${entries.length} commands shown` + (hidden ? ` · ${hidden} read-only hidden` : '');
+}
+
+function load(list, title) {
+  entries = list.sort((a, b) => a.ts.localeCompare(b.ts));
+  $('#title').textContent = title;
+  render();
+}
+
+// Recent list lives in localStorage; storage can be unavailable (private mode), so it degrades to empty.
+function recent() { try { return JSON.parse(localStorage.getItem('recent')) || []; } catch { return []; } }
+function remember(path) {
+  try { localStorage.setItem('recent', JSON.stringify([path, ...recent().filter(p => p !== path)].slice(0, 10))); } catch {}
+}
+
+async function open(path) {
+  const paths = path === ALL ? files.map(f => f.path) : [path];
+  const texts = await Promise.all(paths.map(p => fetch('/api/file?path=' + encodeURIComponent(p)).then(r => r.ok ? r.text() : null)));
+  if (texts.every(t => t === null)) { $('#status').textContent = `Not found: ${path}`; return; }
+  current = path;
+  remember(path);
+  load(texts.flatMap((t, i) => t === null ? [] : parse(t, base(paths[i]))), path === ALL ? 'All files' : base(path));
+  sidebar();
+}
+
+function sidebar() {
+  const btn = (path, label, sub) =>
+    `<button data-path="${esc(path)}" title="${esc(path)}" class="${path === current ? 'on' : ''}">${esc(label)} <small>${esc(sub)}</small></button>`;
+  $('#recent').innerHTML = recent().map(p => btn(p, p === ALL ? 'All files' : base(p), p === ALL ? '' : p.slice(0, -base(p).length))).join('')
+    || '<small>Nothing opened yet.</small>';
+  let dir = null, html = files.length ? btn(ALL, 'All files', `${files.length} files`) : '<small>No server: drop files below.</small>';
+  for (const f of files) {
+    if (f.dir !== dir) html += `<div class="dir">${esc(dir = f.dir)}</div>`;
+    html += btn(f.path, f.name, `${Math.ceil(f.size / 1024)}K`);
+  }
+  $('#files').innerHTML = html;
+}
+
+document.addEventListener('click', e => { const b = e.target.closest('button[data-path]'); if (b) open(b.dataset.path); });
+for (const id of ['#q', '#ro', '#gap']) $(id).addEventListener('input', render);
+
+async function readLocal(list) {
+  list = [...list].filter(f => /\.(log|jsonl)$/.test(f.name));
+  if (!list.length) return;
+  current = null;
+  load((await Promise.all(list.map(async f => parse(await f.text(), f.name)))).flat(), `${list.length} local file(s)`);
+  sidebar();
+}
+$('#pick').addEventListener('change', e => readLocal(e.target.files));
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); readLocal(e.dataTransfer.files); });
+
+fetch('/api/files').then(r => r.json()).then(f => { files = f; }).catch(() => {}).finally(() => {
+  sidebar();
+  const last = recent()[0];
+  if (last && (last === ALL ? files.length : files.some(f => f.path === last))) open(last);
+});
+</script>
+</body>
+</html>
