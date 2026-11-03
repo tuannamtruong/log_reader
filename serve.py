@@ -56,7 +56,10 @@ if __name__ == "__main__":
     ap.add_argument("dirs", nargs="*", default=["~/.claude/logs"])
     ap.add_argument("--port", type=int, default=8700)
     args = ap.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    server.roots = [Path(d).expanduser().resolve() for d in args.dirs]
-    print(f"Serving {', '.join(map(str, server.roots))} on http://localhost:{args.port}")
-    server.serve_forever()
+    with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
+        server.roots = [Path(d).expanduser().resolve() for d in args.dirs]
+        print(f"Serving {', '.join(map(str, server.roots))} on http://localhost:{args.port}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
