@@ -1,4 +1,4 @@
-"""Self-check for serve.py's path guard: python3 test_serve.py"""
+"""Self-check for serve.py's path guard"""
 import tempfile
 from pathlib import Path
 

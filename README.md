@@ -30,4 +30,3 @@ Without the server, open `index.html` directly and drop log files onto the page.
 
 The server binds to `127.0.0.1`, rejects any `Host` other than `localhost` / `127.0.0.1` (DNS rebinding) and serves only `.log` / `.jsonl` files directly inside the given folders.
 No subfolders, `..`, or symlinks pointing out.
-`test_serve.py` checks that guard:
