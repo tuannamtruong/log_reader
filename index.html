@@ -29,7 +29,6 @@
   .bar input[type=search] { flex: 1 1 220px; padding: 5px 8px; font: inherit; color: inherit; background: var(--code);
                             border: 1px solid var(--line); border-radius: 4px; }
   .bar input[type=number] { width: 4em; font: inherit; }
-  #status { color: var(--muted); font-size: 12px; width: 100%; }
   section { margin-top: 16px; }
   h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
   h3 small { font-weight: 400; color: var(--muted); }
@@ -84,12 +83,10 @@
 </aside>
 <main>
   <div class="bar">
-    <strong id="title">No log open</strong>
     <input id="q" type="search" placeholder="Search commands and descriptions">
     <label><input id="ro" type="checkbox"> Hide read-only</label>
     <label>Session gap <input id="gap" type="number" min="1" value="30"> min</label>
     <button id="gear" type="button">Settings</button>
-    <div id="status"></div>
   </div>
   <div id="out"><p class="empty">Pick a log on the left.</p></div>
 </main>
@@ -164,17 +161,15 @@ const NEWTAB = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stro
 
 function render() {
   const q = $('#q').value.toLowerCase(), hideRo = $('#ro').checked;
-  let shown = 0, hidden = 0, html = '';
+  let html = '';
   const groups = sessions(entries, +$('#gap').value || 30);
   for (const g of groups) {
     const items = g.items.filter(e => {
       if (q && !`${e.cmd}\n${e.desc ?? ''}`.toLowerCase().includes(q)) return false;
-      if (hideRo && (e.ro ??= readOnly(e.cmd))) { hidden++; return false; }
-      return true;
+      return !(hideRo && (e.ro ??= readOnly(e.cmd)));
     });
     if (!items.length) continue;
     if (prefs.order === 'desc') items.reverse();
-    shown += items.length;
     const first = g.items[0].ts, last = g.items.at(-1).ts;
     const where = [...new Set(g.items.map(e => e.file))].join(', ');
     // Dropped local files have no server path to reopen, so only server files get the link.
@@ -189,12 +184,10 @@ function render() {
     html += '</section>';
   }
   $('#out').innerHTML = html || '<p class="empty">Nothing matches.</p>';
-  $('#status').textContent = `${shown} of ${entries.length} commands shown` + (hidden ? ` · ${hidden} read-only hidden` : '');
 }
 
-function load(list, title) {
+function load(list) {
   entries = list.sort((a, b) => a.ts.localeCompare(b.ts));
-  $('#title').textContent = title;
   render();
 }
 
@@ -245,14 +238,14 @@ applyPrefs();
 async function open(path) {
   const paths = path === ALL ? files.map(f => f.path) : [path];
   const texts = await Promise.all(paths.map(p => fetch('/api/file?path=' + encodeURIComponent(p)).then(r => r.ok ? r.text() : null)));
-  if (texts.every(t => t === null)) { $('#status').textContent = `Not found: ${path}`; return; }
+  if (texts.every(t => t === null)) { $('#out').innerHTML = `<p class="empty">Not found: ${esc(path)}</p>`; return; }
   current = path;
-  let list = texts.flatMap((t, i) => t === null ? [] : parse(t, base(paths[i]))), title = path === ALL ? 'All files' : base(path);
+  let list = texts.flatMap((t, i) => t === null ? [] : parse(t, base(paths[i])));
   if (solo.has('file')) {
     list = list.filter(inSolo);
-    document.title = title += ' · ' + (solo.get('session')?.slice(0, 8) ?? solo.get('from').slice(0, 16));
+    document.title = `${path === ALL ? 'All files' : base(path)} · ${solo.get('session')?.slice(0, 8) ?? solo.get('from').slice(0, 16)}`;
   } else remember(path);
-  load(list, title);
+  load(list);
   sidebar();
 }
 
@@ -282,7 +275,7 @@ async function readLocal(list) {
   list = [...list].filter(f => /\.(log|jsonl)$/.test(f.name));
   if (!list.length) return;
   current = null;
-  load((await Promise.all(list.map(async f => parse(await f.text(), f.name)))).flat(), `${list.length} local file(s)`);
+  load((await Promise.all(list.map(async f => parse(await f.text(), f.name)))).flat());
   sidebar();
 }
 $('#pick').addEventListener('change', e => readLocal(e.target.files));
