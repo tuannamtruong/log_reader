@@ -1,6 +1,6 @@
 # Logs Reader
 
-Reading logs.
+Reading logs with .log / .jsonl format.
 
 ## 1. Run
 

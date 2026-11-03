@@ -32,7 +32,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             self.send(200, "text/html; charset=utf-8", (HERE / "index.html").read_bytes())
         elif url.path == "/api/files":
-            files = [{"path": str(p), "name": p.name, "dir": str(p.parent), "size": p.stat().st_size}
+            files = [{"path": str(p), "name": p.name, "dir": str(p.parent)}
                      for p in log_files(roots)]
             self.send(200, "application/json", json.dumps(files).encode())
         elif url.path == "/api/file" and (p := resolve(parse_qs(url.query).get("path", [""])[0], roots)):
