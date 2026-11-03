@@ -98,6 +98,7 @@
     <div class="color"><input type="color" name="fg" aria-label="Text colour"><span>Text colour<small>Commands, titles, file names</small></span>
       <input class="hex" name="fg" maxlength="7" spellcheck="false" aria-label="Text colour hex"><button type="button" data-reset="fg">Reset</button></div>
     <h2>Sidebar text</h2><div class="cards" id="sizes" style="--min: 150px"></div>
+    <h2>Commands in a session</h2><div class="cards" id="orders"></div>
     <button>Done</button>
   </form>
 </dialog>
@@ -162,6 +163,7 @@ function render() {
       return true;
     });
     if (!items.length) continue;
+    if (prefs.order === 'desc') items.reverse();
     shown += items.length;
     const first = g.items[0].ts, last = g.items.at(-1).ts;
     const where = [...new Set(g.items.map(e => e.file))].join(', ');
@@ -189,16 +191,20 @@ const store = (key, value) => { try { localStorage.setItem(key, JSON.stringify(v
 function recent() { return stored('recent', []); }
 function remember(path) { store('recent', [path, ...recent().filter(p => p !== path)].slice(0, 10)); }
 
-// Settings: theme (starts from the OS light/dark preference), colour overrides ('' = theme's own), sidebar text scale.
+// Settings: theme (starts from the OS light/dark preference), colour overrides ('' = theme's own), sidebar text scale,
+// command order inside a session.
 const THEMES = [['light', 'Light', 'The default'], ['dark', 'Dark', 'For a dim room'], ['green', 'Green', 'Cool, low contrast'],
   ['teal', 'Teal', 'Cool, cooler still'], ['orange', 'Orange', 'Warm'], ['yellow', 'Yellow', 'Warm, paper-like']];
 const SIZES = [[0.8, 'Small', 'A fifth smaller'], [1, 'Normal', 'The default'], [1.2, 'Large', 'A fifth larger'], [1.4, 'Maximal', 'Two fifths larger']];
-let prefs = { theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light', accent: '', fg: '', side: 1, ...stored('settings', {}) };
+const ORDERS = [['asc', 'Oldest first', 'As they ran, top to bottom', '↓'], ['desc', 'Newest first', 'Latest command on top', '↑']];
+let prefs = { theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light', accent: '', fg: '', side: 1, order: 'asc',
+  ...stored('settings', {}) };
 
 const card = (name, value, icon, label, sub) =>
   `<label class="card"><input type="radio" name="${name}" value="${value}">${icon}<span>${label}<small>${sub}</small></span></label>`;
 $('#themes').innerHTML = THEMES.map(([v, l, s]) => card('theme', v, `<span class="sw" data-theme="${v}"><i></i><i></i><i></i></span>`, l, s)).join('');
 $('#sizes').innerHTML = SIZES.map(([v, l, s]) => card('side', v, `<span class="aa" style="font-size:${v * 28}px">Aa</span>`, l, s)).join('');
+$('#orders').innerHTML = ORDERS.map(([v, l, s, i]) => card('order', v, `<span class="aa" style="font-size:28px">${i}</span>`, l, s)).join('');
 
 function applyPrefs() {
   const root = document.documentElement;
@@ -214,8 +220,10 @@ function applyPrefs() {
 }
 function setPref(k, v) { prefs[k] = v; store('settings', prefs); applyPrefs(); }
 $('#settings').addEventListener('input', ({ target: el }) => {
-  if (el.type === 'radio') setPref(el.name, el.name === 'side' ? +el.value : el.value);
-  else if (/^#[0-9a-f]{6}$/i.test(el.value)) setPref(el.name, el.value.toLowerCase());
+  if (el.type === 'radio') {
+    setPref(el.name, el.name === 'side' ? +el.value : el.value);
+    if (el.name === 'order' && entries.length) render();
+  } else if (/^#[0-9a-f]{6}$/i.test(el.value)) setPref(el.name, el.value.toLowerCase());
 });
 $('#settings').addEventListener('click', e => { if (e.target.dataset.reset) setPref(e.target.dataset.reset, ''); });
 $('#gear').addEventListener('click', () => $('#settings').showModal());
