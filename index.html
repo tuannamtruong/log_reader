@@ -33,6 +33,10 @@
   section { margin-top: 16px; }
   h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
   h3 small { font-weight: 400; color: var(--muted); }
+  h3 a { color: var(--accent); }
+  h3 a svg { vertical-align: -4px; }
+  .solo { grid-template-columns: 1fr; }
+  .solo aside { display: none; }
   .e { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; padding: 4px 0; border-top: 1px solid var(--line); }
   .e time, .e .f { font-size: 12px; color: var(--muted); }
   .e .d { grid-column: 2; }
@@ -108,6 +112,10 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const base = p => p.split('/').pop();
 const ALL = '*';
 let files = [], entries = [], current = null;
+// One session in its own tab: ?file=PATH plus session=ID, or from/to timestamps for sessions without an id.
+const solo = new URLSearchParams(location.search);
+const inSolo = e => solo.has('session') ? e.session === solo.get('session') : !e.session && e.ts >= solo.get('from') && e.ts <= solo.get('to');
+document.body.classList.toggle('solo', solo.has('file'));
 
 // Old hook format: "[YYYY-MM-DD HH:MM:SS] command", command may span lines. New: one JSON object per line.
 function parse(text, file) {
@@ -149,8 +157,10 @@ function sessions(list, gapMin) {
   return out.sort((a, b) => b.items.at(-1).t - a.items.at(-1).t);
 }
 
-const COPY = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+const COPY = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
   <rect x="8" y="2" width="13" height="16" rx="2"/><path d="M8 6H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-2"/></svg>`;
+const NEWTAB = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 16V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8M3 21l9-9M7 12h5v5"/></svg>`;
 
 function render() {
   const q = $('#q').value.toLowerCase(), hideRo = $('#ro').checked;
@@ -167,8 +177,11 @@ function render() {
     shown += items.length;
     const first = g.items[0].ts, last = g.items.at(-1).ts;
     const where = [...new Set(g.items.map(e => e.file))].join(', ');
+    // Dropped local files have no server path to reopen, so only server files get the link.
+    const tab = current && !solo.has('file') ? ` <a target="_blank" href="?${esc(new URLSearchParams({ file: current,
+      ...(g.id ? { session: g.id } : { from: first, to: last }) }))}" title="Open in new tab" aria-label="Open in new tab">${NEWTAB}</a>` : '';
     html += `<section><h3>${esc(first.slice(0, 16))} → ${esc(last.slice(first.slice(0, 10) === last.slice(0, 10) ? 11 : 0, 16))}
-      <small>· ${items.length}/${g.items.length} commands · ${esc(where)}${g.id ? ' · ' + esc(g.id.slice(0, 8)) : ''}</small></h3>`;
+      <small>· ${items.length}/${g.items.length} commands · ${esc(where)}${g.id ? ' · ' + esc(g.id.slice(0, 8)) : ''}</small>${tab}</h3>`;
     for (const e of items) {
       html += `<div class="e"><time>${esc(e.ts.slice(11))}</time><span class="f" title="${esc(e.cwd)}">${esc(e.file)}</span><button title="Copy command" aria-label="Copy command">${COPY}</button>
         ${e.desc ? `<span class="d">${esc(e.desc)}</span>` : ''}<pre>${esc(e.cmd)}</pre></div>`;
@@ -234,8 +247,12 @@ async function open(path) {
   const texts = await Promise.all(paths.map(p => fetch('/api/file?path=' + encodeURIComponent(p)).then(r => r.ok ? r.text() : null)));
   if (texts.every(t => t === null)) { $('#status').textContent = `Not found: ${path}`; return; }
   current = path;
-  remember(path);
-  load(texts.flatMap((t, i) => t === null ? [] : parse(t, base(paths[i]))), path === ALL ? 'All files' : base(path));
+  let list = texts.flatMap((t, i) => t === null ? [] : parse(t, base(paths[i]))), title = path === ALL ? 'All files' : base(path);
+  if (solo.has('file')) {
+    list = list.filter(inSolo);
+    document.title = title += ' · ' + (solo.get('session')?.slice(0, 8) ?? solo.get('from').slice(0, 16));
+  } else remember(path);
+  load(list, title);
   sidebar();
 }
 
@@ -274,7 +291,7 @@ addEventListener('drop', e => { e.preventDefault(); readLocal(e.dataTransfer.fil
 
 fetch('/api/files').then(r => r.json()).then(f => { files = f; }).catch(() => {}).finally(() => {
   sidebar();
-  const last = recent()[0];
+  const last = solo.get('file') ?? recent()[0];
   if (last && (last === ALL ? files.length : files.some(f => f.path === last))) open(last);
 });
 </script>
